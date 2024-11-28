@@ -1,7 +1,10 @@
-﻿using HashingAPI.Models;
+﻿using DocumentFormat.OpenXml.Packaging;
+using HashingAPI.Models;
 using HashingAPI.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace HashingAPI.Controllers
 {
@@ -40,23 +43,109 @@ namespace HashingAPI.Controllers
             using var memoryStream = new MemoryStream();
             request.File.CopyTo(memoryStream);
             var originalBytes = memoryStream.ToArray();
+
+            // Обчислюємо хеш оригінального файлу
             var originalHash = _hashService.ComputeHash(originalBytes, request.Bits);
 
-            var modifiedBytes = new byte[originalBytes.Length];
-            originalBytes.CopyTo(modifiedBytes, 0);
+            // Створюємо копію файлу та змінюємо її метаінформацію
+            byte[] modifiedBytes;
+            string fileType = request.File.ContentType.ToLower();
 
-            // Простая модификация: изменяем последний байт
-            modifiedBytes[^1] ^= 0xFF;
-
-            var newHash = _hashService.ComputeHash(modifiedBytes, request.Bits);
-
-            while (!_hashService.AreHashesEqual(originalHash, newHash))
+            if (fileType.Contains("word") || fileType.Contains("msword") || fileType.Contains("officedocument"))
             {
-                modifiedBytes[^1] = (byte)((modifiedBytes[^1] + 1) % 256);
-                newHash = _hashService.ComputeHash(modifiedBytes, request.Bits);
+                modifiedBytes = ModifyWordFile(originalBytes, originalHash, request.Bits);
+            }
+            else if (fileType.Contains("image"))
+            {
+                modifiedBytes = ModifyImageBytes(originalBytes, originalHash, request.Bits);
+            }
+            else
+            {
+                modifiedBytes = ModifyTextFile(originalBytes, originalHash, request.Bits);
             }
 
-            return Ok(new { ModifiedBytes = modifiedBytes, NewHash = Convert.ToBase64String(newHash) });
+            var newHash = _hashService.ComputeHash(modifiedBytes, request.Bits);
+            return File(modifiedBytes, request.File.ContentType, "collision_" + request.File.FileName);
+        }
+
+        private byte[] ModifyWordFile(byte[] fileBytes, byte[] originalHash, int bits)
+        {
+            using var memoryStream = new MemoryStream(fileBytes);
+            using var wordDocument = WordprocessingDocument.Open(memoryStream, true);
+
+            var coreProps = wordDocument.PackageProperties;
+
+            // Початкове редагування метаданих
+            coreProps.Creator = "Modified Author";
+            coreProps.Description = "Modified Content";
+            coreProps.Keywords = "collision";
+            coreProps.Modified = DateTime.Now;
+
+            wordDocument.Save();
+            var modifiedBytes = memoryStream.ToArray();
+
+            // Циклічне редагування для досягнення колізії
+            while (!_hashService.AreHashesEqual(originalHash, _hashService.ComputeHash(modifiedBytes, bits)))
+            {
+                coreProps.Keywords += " "; // Додаємо пробіл до ключових слів
+                wordDocument.Save();
+                modifiedBytes = memoryStream.ToArray();
+            }
+
+            return modifiedBytes;
+        }
+
+        private byte[] ModifyImageBytes(byte[] fileBytes, byte[] originalHash, int bits)
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(fileBytes);
+
+            // Змінюємо пікселі, щоб досягти колізії
+            for (int y = 0; y < image.Height; y++)
+            {
+                for (int x = 0; x < image.Width; x++)
+                {
+                    var pixel = image[x, y];
+
+                    // Міняємо значення синього каналу (або іншого каналу) в межах ±1
+                    if (pixel.B < 255)
+                        pixel.B += 1;
+                    else
+                        pixel.B -= 1;
+
+                    image[x, y] = pixel;
+
+                    // Перевіряємо, чи досягли ми колізії
+                    using var memoryStream = new MemoryStream();
+                    image.SaveAsPng(memoryStream); // Зберігаємо тимчасовий файл
+                    var modifiedBytes = memoryStream.ToArray();
+
+                    if (_hashService.AreHashesEqual(originalHash, _hashService.ComputeHash(modifiedBytes, bits)))
+                    {
+                        return modifiedBytes; // Колізія досягнута
+                    }
+                }
+            }
+
+            throw new InvalidOperationException("Unable to generate collision for the image.");
+        }
+
+        private byte[] ModifyTextFile(byte[] fileBytes, byte[] originalHash, int bits)
+        {
+            var content = System.Text.Encoding.UTF8.GetString(fileBytes);
+
+            // Початкове додавання коментарів
+            content += "\n// Collision Test";
+
+            var modifiedBytes = System.Text.Encoding.UTF8.GetBytes(content);
+
+            // Циклічне редагування для досягнення колізії
+            while (!_hashService.AreHashesEqual(originalHash, _hashService.ComputeHash(modifiedBytes, bits)))
+            {
+                content += " ";
+                modifiedBytes = System.Text.Encoding.UTF8.GetBytes(content);
+            }
+
+            return modifiedBytes;
         }
     }
 
