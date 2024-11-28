@@ -134,7 +134,7 @@ namespace HashingAPI.Controllers
             var content = System.Text.Encoding.UTF8.GetString(fileBytes);
 
             // Початкове додавання коментарів
-            content += "\n// Collision Test";
+            content += "\n// Test";
 
             var modifiedBytes = System.Text.Encoding.UTF8.GetBytes(content);
 
