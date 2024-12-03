@@ -65,7 +65,19 @@ namespace HashingAPI.Controllers
             }
 
             var newHash = _hashService.ComputeHash(modifiedBytes, request.Bits);
-            return File(modifiedBytes, request.File.ContentType, "collision_" + request.File.FileName);
+            //return File(modifiedBytes, request.File.ContentType, "collision_" + request.File.FileName);
+
+            // Зберігаємо модифікований файл на сервері
+            string savePath = Path.Combine("StoredFiles", $"collision_{request.File.FileName}");
+            Directory.CreateDirectory(Path.GetDirectoryName(savePath)); // Переконуємося, що каталог існує
+            System.IO.File.WriteAllBytes(savePath, modifiedBytes);
+
+            return Ok(new
+            {
+                Message = "Collision file generated and saved successfully.",
+                FilePath = savePath,
+                NewHash = Convert.ToBase64String(newHash)
+            });
         }
 
         private byte[] ModifyWordFile(byte[] fileBytes, byte[] originalHash, int bits)
